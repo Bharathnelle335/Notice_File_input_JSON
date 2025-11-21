@@ -1,0 +1,207 @@
+
+name: ScanCode single component (source install, dual outputs)
+
+on:
+  workflow_dispatch:
+    inputs:
+      input_file:
+        description: "Path to the input JSON containing ONE component (default: input/component.json)"
+        default: "input/component.json"
+        required: true
+        type: string
+      scan_options:
+        description: "ScanCode options (default tuned for attribution)"
+        default: "--copyright --license --info --strip-root"
+        required: true
+        type: string
+
+jobs:
+  setup-input:
+    runs-on: ubuntu-latest
+    outputs:
+      component: ${{ steps.read.outputs.component }}
+      version:   ${{ steps.read.outputs.version }}
+      url:       ${{ steps.read.outputs.url }}
+      license:   ${{ steps.read.outputs.license }}
+      sno:       ${{ steps.read.outputs.sno }}
+      input_file: ${{ steps.echo.outputs.input_file }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Echo input path
+        id: echo
+        run: echo "input_file=${{ github.event.inputs.input_file }}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate input file and read fields (ONE object)
+        id: read
+        shell: bash
+        run: |
+          set -e
+          INPUT="${{ github.event.inputs.input_file }}"
+          if [ ! -f "$INPUT" ]; then
+            echo "::error::Input file not found: $INPUT"
+            exit 1
+          fi
+
+          # Ensure it's ONE object (not an array)
+          TYPE=$(jq -r 'type' "$INPUT")
+          if [ "$TYPE" != "object" ]; then
+            echo "::error::Input must be a single JSON object, not an array."
+            exit 1
+          fi
+
+          COMPONENT=$(jq -r '.Component // empty' "$INPUT")
+          VERSION=$(jq -r '.version   // empty' "$INPUT")
+          URL=$(jq -r '.Url        // empty' "$INPUT")
+          LICENSE=$(jq -r '.license   // empty' "$INPUT")
+          SNO=$(jq -r '."S.No"     // 0' "$INPUT")
+
+          if [ -z "$URL" ]; then
+            echo "::error::Url is required in input to clone the repository."
+            exit 1
+          fi
+
+          echo "component=$COMPONENT" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION"     >> "$GITHUB_OUTPUT"
+          echo "url=$URL"             >> "$GITHUB_OUTPUT"
+          echo "license=$LICENSE"     >> "$GITHUB_OUTPUT"
+          echo "sno=$SNO"             >> "$GITHUB_OUTPUT"
+
+  build-scancode:
+    runs-on: ubuntu-latest
+    needs: setup-input
+    outputs:
+      scancode_path: ${{ steps.paths.outputs.scancode_path }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python (3.11)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+        # ScanCode supports Python 3.9–3.13. (official docs)  # [1](https://stackoverflow.com/questions/79668405/github-actions-artifact-storage-quota-has-been-hit-even-after-deleting-all-art)
+
+      - name: Clone ScanCode Toolkit (git)
+        run: |
+          git clone --depth=1 https://github.com/aboutcode-org/scancode-toolkit.git
+          cd scancode-toolkit
+          git fetch --tags
+          # Use a known good tag; change if you prefer another stable version
+          git checkout v32.2.1
+        # Project repository & releases  # [3](https://docs.github.com/en/actions/tutorials/store-and-share-data)[4](https://github.blog/changelog/2023-12-14-github-actions-artifacts-v4-is-now-generally-available/)
+
+      - name: Configure & install (source install)
+        run: |
+          cd scancode-toolkit
+          ./configure --with-defaults
+        # Source install method per docs  # [1](https://stackoverflow.com/questions/79668405/github-actions-artifact-storage-quota-has-been-hit-even-after-deleting-all-art)
+
+      - name: Resolve scancode binary path
+        id: paths
+        shell: bash
+        run: echo "scancode_path=$PWD/scancode-toolkit/scancode" >> "$GITHUB_OUTPUT"
+
+  scan-and-output:
+    runs-on: ubuntu-latest
+    needs: [setup-input, build-scancode]
+    env:
+      COMPONENT: ${{ needs.setup-input.outputs.component }}
+      VERSION:   ${{ needs.setup-input.outputs.version }}
+      URL:       ${{ needs.setup-input.outputs.url }}
+      LICENSE:   ${{ needs.setup-input.outputs.license }}
+      SNO:       ${{ needs.setup-input.outputs.sno }}
+      INPUT_FILE: ${{ needs.setup-input.outputs.input_file }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Clone target repository
+        shell: bash
+        run: |
+          set -e
+          git clone --depth=1 "$URL" repo || { 
+            echo "::error::Clone failed for $URL"; 
+            exit 1; 
+          }
+
+      - name: Checkout target ref (latest/stable if version not provided or unknown)
+        shell: bash
+        working-directory: repo
+        run: |
+          set -e
+          if [ -n "$VERSION" ] && [ "$VERSION" != "unknown" ]; then
+            git fetch --tags || true
+            git checkout "$VERSION" || git checkout "v$VERSION" || true
+          else
+            git fetch --tags || true
+            LATEST="$(git tag --list | sed -n 's/^v\\?\\([0-9].*\\)$/\\1/p' | sort -V | tail -n1)"
+            if [ -n "$LATEST" ]; then
+              git checkout "$LATEST" || git checkout "v$LATEST" || true
+              echo "LATEST_TAG=$LATEST" >> $GITHUB_ENV
+            else
+              echo "::notice::No tags found; scanning default branch HEAD."
+            fi
+          fi
+
+      - name: Run ScanCode (attribution & info)
+        shell: bash
+        run: |
+          set -e
+          SCANCODE="${{ needs.build-scancode.outputs.scancode_path }}"
+
+          # Use provided options (defaults: copyright, license, info, strip-root)
+          "$SCANCODE" ${{ github.event.inputs.scan_options }} \
+            --json-pp scan_output.json repo
+
+      - name: Build enriched output (exact input + copyrights added)
+        shell: bash
+        run: |
+          set -e
+          python - <<'PY'
+          import json, os, sys
+          # Read original single-object input to preserve fields exactly
+          inp_path = os.environ["INPUT_FILE"]
+          with open(inp_path, "r", encoding="utf-8") as f:
+            comp = json.load(f)
+
+          # Override version if we resolved a latest tag and input was unknown/empty
+          latest_tag = os.environ.get("LATEST_TAG")
+          if (not comp.get("version")) or (str(comp.get("version")).strip().lower() == "unknown"):
+              if latest_tag:
+                  comp["version"] = latest_tag
+
+          # Collect copyrights only (no authors in the enriched file)
+          copyrights = set()
+          if os.path.exists("scan_output.json"):
+              with open("scan_output.json","r",encoding="utf-8") as f:
+                  data = json.load(f)
+              for fi in data.get("files", []):
+                  for c in fi.get("copyrights", []):
+                      v = (c.get("copyright") or "").strip()
+                      if v: copyrights.add(v)
+
+          comp["copyrights"] = sorted(copyrights)
+
+          # Write enriched file
+          os.makedirs("out", exist_ok=True)
+          s_no = comp.get("S.No", 0)
+          name = comp.get("Component") or "unknown"
+          out_file = f'out/component-{s_no}-{name}-enriched.json'
+          with open(out_file, "w", encoding="utf-8") as f:
+              json.dump(comp, f, indent=2)
+          PY
+
+      - name: Save raw ScanCode JSON (full data, no extra fields)
+        shell: bash
+        run: |
+          set -e
+          mkdir -p out
+          RAW_NAME="out/component-${SNO}-${COMPONENT}-raw-scancode.json"
+          cp scan_output.json "$RAW_NAME"
+
+      - name: Upload outputs (v4, immediate)
+        uses: actions/upload-artifact@v4
+        with:
+          name: component-${{ env.SNO }}-${{ env.COMPONENT }}
