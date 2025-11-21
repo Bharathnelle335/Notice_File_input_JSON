@@ -1,18 +1,18 @@
 
-name: ScanCode copyrights/authors (source install, full parallel)
+name: ScanCode copyrights/authors (source install, full parallel, dual artifacts)
 
 on:
   workflow_dispatch:
     inputs:
       components_file:
         description: "Path to input components JSON (default: input/components.json)"
-        default: "input/nanos-0.1.54_19.json"
+        default: "input/components.json"
         required: true
         type: string
-      # page_size removed (not needed when running everything concurrently)
       scan_options:
-        description: "ScanCode options (space-separated)"
-        default: "--copyright --info"
+        description: "ScanCode options"
+        # Stronger defaults for attribution detection:
+        default: "--copyright --license --info --only-findings --strip-root"
         required: true
         type: string
 
@@ -21,18 +21,14 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.build.outputs.matrix }}
-      count: ${{ steps.count.outputs.count }}
       components_file: ${{ steps.echo.outputs.components_file }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Echo input path
-        id: echo
+      - id: echo
         run: echo "components_file=${{ github.event.inputs.components_file }}" >> "$GITHUB_OUTPUT"
 
-      - name: Validate & build dynamic matrix (wrap in {include:[...]})
-        id: build
+      - id: build
         shell: bash
         run: |
           set -e
@@ -41,17 +37,10 @@ jobs:
             echo "::error::Input file not found: $INPUT"
             exit 1
           fi
+          # Build a proper dynamic matrix: {"include":[ ... ]}
           MATRIX=$(jq -c '{ include: [ .[] 
-            | select(.Url != null and .Url != "") 
             | { Component: .Component, Url: .Url, version: .version, license: .license, SNo: (."S.No") } ] }' "$INPUT")
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
-
-      - name: Count components
-        id: count
-        run: |
-          INPUT="${{ github.event.inputs.components_file }}"
-          COUNT=$(jq 'length' "$INPUT")
-          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
 
       - name: Debug matrix
         run: |
@@ -63,122 +52,174 @@ jobs:
     outputs:
       scancode_path: ${{ steps.paths.outputs.scancode_path }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Set up Python (3.11)
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-        # ScanCode supports Python 3.9–3.13. [3](blob:https://m365.cloud.microsoft/595628d9-a8c8-4019-a693-327216579b68)[4](blob:https://m365.cloud.microsoft/68941719-015b-4cd9-b92b-3c4176910543)
+        # ScanCode supports Python 3.9–3.13. [6](blob:https://m365.cloud.microsoft/595628d9-a8c8-4019-a693-327216579b68)
 
-      - name: Clone ScanCode Toolkit (git)
+      - name: Clone ScanCode Toolkit
         run: |
           git clone --depth=1 https://github.com/aboutcode-org/scancode-toolkit.git
           cd scancode-toolkit
           git fetch --tags
           git checkout v32.2.1
-        # Project repo & releases refs. [5](blob:https://m365.cloud.microsoft/f17acca1-bb94-45b9-ac50-5539812c1130)[6](blob:https://m365.cloud.microsoft/327b8b89-159c-4e89-8b9f-db9155df617e)
+        # Repo & release refs. [7](blob:https://m365.cloud.microsoft/f17acca1-bb94-45b9-ac50-5539812c1130)[8](blob:https://m365.cloud.microsoft/47dcd16b-23f7-469e-960a-b99c0342217b)
 
-      - name: Configure & install (source install)
+      - name: Configure and install (source install)
         run: |
           cd scancode-toolkit
           ./configure --with-defaults
-        # Source install via configure script. [3](blob:https://m365.cloud.microsoft/595628d9-a8c8-4019-a693-327216579b68)
+        # Source install path in docs. [6](blob:https://m365.cloud.microsoft/595628d9-a8c8-4019-a693-327216579b68)
 
-      - name: Resolve scancode binary path
+      - name: Resolve scancode path
         id: paths
         shell: bash
-        run: |
-          echo "scancode_path=$PWD/scancode-toolkit/scancode" >> "$GITHUB_OUTPUT"
+        run: echo "scancode_path=$PWD/scancode-toolkit/scancode" >> "$GITHUB_OUTPUT"
 
   scan-component:
     runs-on: ubuntu-latest
     needs: [prepare-matrix, build-scancode]
     strategy:
       fail-fast: false
-      # NO max-parallel -> run all matrix jobs at once (subject to runner limits). [1](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/run-job-variations)
       matrix: ${{ fromJson(needs.prepare-matrix.outputs.matrix) }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Clone target repository
-        if: ${{ matrix.Url != '' }}
+      - name: Clone repository
         shell: bash
         run: |
           set -e
-          git clone --depth=1 "${{ matrix.Url }}" repo || {
-            echo "::warning::Clone failed for ${{ matrix.Url }}"; 
-            mkdir -p repo; 
-          }
+          if [ -z "${{ matrix.Url }}" ]; then
+            echo "::warning::No URL for S.No=${{ matrix.SNo }} Component=${{ matrix.Component }}"; 
+            mkdir -p repo
+          else
+            git clone --depth=1 "${{ matrix.Url }}" repo || { echo "::warning::Clone failed"; mkdir -p repo; }
+          fi
 
-      - name: Run ScanCode (source install, direct CLI)
+      - name: Checkout target ref (latest/stable if version unknown)
+        shell: bash
+        working-directory: repo
+        run: |
+          set -e
+          TARGET="${{ matrix.version }}"
+          if [ -n "$TARGET" ] && [ "$TARGET" != "unknown" ]; then
+            # Try tag/branch named TARGET
+            git fetch --tags || true
+            git checkout "$TARGET" || git checkout "v$TARGET" || true
+          else
+            # Best-effort latest stable tag (semver)
+            git fetch --tags || true
+            LATEST="$(git tag --list | sed -n 's/^v\\?\\([0-9].*\\)$/\\1/p' | sort -V | tail -n1)"
+            if [ -n "$LATEST" ]; then
+              git checkout "$LATEST" || git checkout "v$LATEST" || true
+              echo "LATEST_TAG=$LATEST" >> $GITHUB_ENV
+            else
+              echo "::notice::No tags found; using default branch HEAD."
+            fi
+          fi
+
+      - name: Run ScanCode
         shell: bash
         run: |
           set -e
           mkdir -p out
           SCANCODE="${{ needs.build-scancode.outputs.scancode_path }}"
+
+          # Use the options provided at dispatch (defaults tuned for attribution).
           "$SCANCODE" ${{ github.event.inputs.scan_options }} \
             --json-pp scan_output.json repo || true
 
+          # ----- Build raw copyrights-only file -----
+          python - <<'PY'
+          import json, os
+          raw = {"S.No": int(os.environ.get("SNO","0")),
+                 "Component": os.environ.get("COMPONENT"),
+                 "Url": os.environ.get("URL"),
+                 "copyrights": [],
+                 "authors": [],
+                 "holders": []}
+          if os.path.exists("scan_output.json"):
+            with open("scan_output.json","r",encoding="utf-8") as f:
+              data = json.load(f)
+            for fi in data.get("files", []):
+              for c in fi.get("copyrights", []):
+                # Prefer canonical keys documented: 'copyright'
+                v = (c.get("copyright") or c.get("value") or "").strip()
+                if v: raw["copyrights"].append(v)
+              for a in fi.get("authors", []):
+                v = (a.get("author") or a.get("value") or "").strip()
+                if v: raw["authors"].append(v)
+              for h in fi.get("holders", []):
+                v = (h.get("holder") or h.get("value") or "").strip()
+                if v: raw["holders"].append(v)
+          # Dedup & sort
+          raw["copyrights"] = sorted(set(raw["copyrights"]))
+          raw["authors"]    = sorted(set(raw["authors"]))
+          raw["holders"]    = sorted(set(raw["holders"]))
+          os.makedirs("out", exist_ok=True)
+          out_raw = f'out/component-{raw["S.No"]}-{raw["Component"]}-copyrights.json'
+          with open(out_raw, "w", encoding="utf-8") as f:
+            json.dump(raw, f, indent=2)
+          PY
+
+          # ----- Build enriched file (your schema + detected fields) -----
           python - <<'PY'
           import json, os
           comp = {
             "Component": os.environ.get("COMPONENT"),
-            "version": os.environ.get("VERSION"),
-            "Url": os.environ.get("URL"),
-            "license": os.environ.get("LICENSE"),
-            "S.No": int(os.environ.get("SNO", "0")),
+            "version":   os.environ.get("VERSION"),
+            "Url":       os.environ.get("URL"),
+            "license":   os.environ.get("LICENSE"),
+            "S.No":      int(os.environ.get("SNO", "0")),
           }
+          # If we checked out a latest tag, override version with that tag
+          lt = os.environ.get("LATEST_TAG")
+          if comp["version"] in (None,"", "unknown") and lt:
+            comp["version"] = lt
+
           copyrights, authors = set(), set()
-          p = "scan_output.json"
-          if os.path.exists(p):
-            with open(p, "r", encoding="utf-8") as f:
+          if os.path.exists("scan_output.json"):
+            with open("scan_output.json","r",encoding="utf-8") as f:
               data = json.load(f)
             for fi in data.get("files", []):
               for c in fi.get("copyrights", []):
-                val = (c.get("value") or c.get("copyright") or "").strip()
-                if val: copyrights.add(val)
+                v = (c.get("copyright") or c.get("value") or "").strip()
+                if v: copyrights.add(v)
               for a in fi.get("authors", []):
-                val = (a.get("value") or a.get("author") or "").strip()
-                if val: authors.add(val)
+                v = (a.get("author") or a.get("value") or "").strip()
+                if v: authors.add(v)
           comp["copyrights"] = sorted(copyrights)
-          comp["authors"] = sorted(authors)
+          comp["authors"]    = sorted(authors)
+
           os.makedirs("out", exist_ok=True)
-          out_file = f'out/component-{comp["S.No"]}.json'
+          out_file = f'out/component-{comp["S.No"]}-{comp["Component"]}-enriched.json'
           with open(out_file, "w", encoding="utf-8") as f:
             json.dump(comp, f, indent=2)
           PY
-        env:
-          COMPONENT: ${{ matrix.Component }}
-          VERSION:   ${{ matrix.version }}
-          URL:       ${{ matrix.Url }}
-          LICENSE:   ${{ matrix.license }}
-          SNO:       ${{ matrix.SNo }}
 
-      - name: Upload per-component artifact (v4, immediate)
+      - name: Upload per-component artifacts (v4, immediate)
         uses: actions/upload-artifact@v4
         with:
           name: component-${{ matrix.SNo }}-${{ matrix.Component }}
           path: out
-        # Artifacts v4 are immediately available per job. [2](https://stackoverflow.com/questions/78999879/how-do-i-upload-artifacts-with-the-github-api-or-cli)
+        # v4 artifacts are immediately available per job. [9](https://stackoverflow.com/questions/78999879/how-do-i-upload-artifacts-with-the-github-api-or-cli)
 
   aggregate:
     runs-on: ubuntu-latest
     needs: scan-component
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Download all component artifacts
+      - name: Download *enriched* artifacts only (merge)
         uses: actions/download-artifact@v4
         with:
           pattern: component-*
           merge-multiple: true
-        # v4 pattern + merge-multiple for aggregation. [2](https://stackoverflow.com/questions/78999879/how-do-i-upload-artifacts-with-the-github-api-or-cli)
 
-      - name: Merge back into original list (dynamic input path)
+      - name: Merge enriched files back into original list
         id: merge
         shell: bash
         run: |
@@ -187,26 +228,27 @@ jobs:
           python - <<'PY'
           import json, glob, os
           inp = os.environ["INPUT"]
-          with open(inp, "r", encoding="utf-8") as f:
+          with open(inp,"r",encoding="utf-8") as f:
             components = json.load(f)
-          enriched = {}
-          for path in glob.glob("**/component-*.json", recursive=True):
-            with open(path, "r", encoding="utf-8") as f:
+          # Index enriched files by S.No
+          enrich = {}
+          for p in glob.glob("**/*-enriched.json", recursive=True):
+            with open(p,"r",encoding="utf-8") as f:
               obj = json.load(f)
-              enriched[obj["S.No"]] = obj
+            enrich[obj["S.No"]] = obj
           out = []
           for item in components:
-            sno = item.get("S.No")
-            add = enriched.get(sno, {})
+            e = enrich.get(item.get("S.No"), {})
             merged = dict(item)
-            merged["copyrights"] = add.get("copyrights", [])
-            merged["authors"]    = add.get("authors", [])
+            merged["version"]     = e.get("version", merged.get("version"))
+            merged["copyrights"]  = e.get("copyrights", [])
+            merged["authors"]     = e.get("authors", [])
             out.append(merged)
           base, ext = os.path.splitext(inp)
-          final_name = f"{base}-with-copyrights-{len(out)}{ext or '.json'}"
-          with open(final_name, "w", encoding="utf-8") as f:
-            json.dump(out, f, indent=2)
-          print(final_name)
+          final = f"{base}-with-copyrights-{len(out)}{ext or '.json'}"
+          with open(final,"w",encoding="utf-8") as f:
+            json.dump(out,f,indent=2)
+          print(final)
           PY
         env:
           INPUT: ${{ needs.prepare-matrix.outputs.components_file }}
