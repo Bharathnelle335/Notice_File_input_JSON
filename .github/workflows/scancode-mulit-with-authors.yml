@@ -1,0 +1,248 @@
+
+name: ScanCode multi-component (source install, full parallel, dual outputs, robust URL handling)
+
+on:
+  workflow_dispatch:
+    inputs:
+      input_file:
+        description: "Path to the input JSON ARRAY of components"
+        default: "input/components.json"
+        required: true
+        type: string
+      scan_options:
+        description: "ScanCode options (tuned for attribution)"
+        default: "--copyright --license --info --strip-root"
+        required: true
+        type: string
+
+jobs:
+  prepare-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate input (must be array) & build matrix
+        id: build
+        shell: bash
+        run: |
+          set -e
+          INPUT="${{ github.event.inputs.input_file }}"
+          if [ ! -f "$INPUT" ]; then
+            echo "::error::Input file not found: $INPUT"
+            exit 1
+          fi
+
+          TYPE=$(jq -r 'type' "$INPUT")
+          if [ "$TYPE" != "array" ]; then
+            echo "::error::Input must be a JSON array of component objects."
+            exit 1
+          fi
+
+          MATRIX=$(jq -c '{ include: [ .[]
+            | { Component: .Component, Url: .Url, version: .version, license: .license, SNo: (."S.No") } ] }' "$INPUT")
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+
+      - name: Debug matrix
+        run: |
+          echo '${{ steps.build.outputs.matrix }}' | jq .
+
+  scan-component:
+    runs-on: ubuntu-latest
+    needs: prepare-matrix
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.prepare-matrix.outputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Export matrix fields (and default status)
+        shell: bash
+        run: |
+          echo "COMPONENT=${{ matrix.Component }}" >> $GITHUB_ENV
+          echo "VERSION=${{ matrix.version }}"     >> $GITHUB_ENV
+          echo "URL=${{ matrix.Url }}"             >> $GITHUB_ENV
+          echo "LICENSE=${{ matrix.license }}"     >> $GITHUB_ENV
+          echo "SNO=${{ matrix.SNo }}"             >> $GITHUB_ENV
+          echo "SCAN_STATUS=not-scanned"           >> $GITHUB_ENV
+
+      - name: Set up Python (3.11)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Clone ScanCode Toolkit (git)
+        shell: bash
+        run: |
+          set -e
+          git clone --depth=1 https://github.com/aboutcode-org/scancode-toolkit.git
+          cd scancode-toolkit
+          git fetch --tags
+          git checkout v32.2.1
+
+      - name: Configure & install ScanCode (source install)
+        working-directory: scancode-toolkit
+        shell: bash
+        run: |
+          set -e
+          ./configure --with-defaults
+          ./scancode --help > /dev/null
+
+      # --- Missing/empty URL: skip scan and still produce two outputs
+      - name: Handle missing URL (skip scan)
+        if: ${{ env.URL == '' }}
+        shell: bash
+        run: |
+          set -e
+          mkdir -p out
+          python - <<'PY'
+          import json, os
+          comp = {
+            "Component": os.environ.get("COMPONENT"),
+            "version":   os.environ.get("VERSION") or "unknown",
+            "Url":       "unknown or not found",
+            "license":   os.environ.get("LICENSE") or "unknown",
+            "S.No":      int(os.environ.get("SNO","0")),
+          }
+          comp["copyrights"] = []
+          out_file = f'out/component-{comp["S.No"]}-{comp["Component"]}-enriched.json'
+          with open(out_file, "w", encoding="utf-8") as f:
+            json.dump(comp, f, indent=2)
+          PY
+          echo '{"message":"Url not found; scan skipped"}' \
+            > "out/component-${SNO}-${COMPONENT}-raw-scancode.json"
+
+      # --- Try clone when URL is provided; mark scanned only if clone succeeds
+      - name: Clone target repository (try)
+        if: ${{ env.URL != '' }}
+        shell: bash
+        run: |
+          set -e
+          if git clone --depth=1 "$URL" repo; then
+            echo "SCAN_STATUS=scanned" >> $GITHUB_ENV
+          else
+            echo "::warning::Clone failed for $URL; will produce not-scanned outputs."
+            mkdir -p repo
+          fi
+
+      # --- If clone failed, produce not-scanned outputs now
+      - name: Produce not-scanned outputs (clone failed)
+        if: ${{ env.URL != '' && env.SCAN_STATUS == 'not-scanned' }}
+        shell: bash
+        run: |
+          set -e
+          mkdir -p out
+          python - <<'PY'
+          import json, os
+          comp = {
+            "Component": os.environ.get("COMPONENT"),
+            "version":   os.environ.get("VERSION") or "unknown",
+            "Url":       "unknown or not found",
+            "license":   os.environ.get("LICENSE") or "unknown",
+            "S.No":      int(os.environ.get("SNO","0")),
+          }
+          comp["copyrights"] = []
+          out_file = f'out/component-{comp["S.No"]}-{comp["Component"]}-enriched.json'
+          with open(out_file, "w", encoding="utf-8") as f:
+            json.dump(comp, f, indent=2)
+          PY
+          echo '{"message":"Url not found; scan skipped"}' \
+            > "out/component-${SNO}-${COMPONENT}-raw-scancode.json"
+
+      # --- If scanned, continue: checkout version/latest tag, run ScanCode, produce outputs
+      - name: Checkout requested or latest stable tag
+        if: ${{ env.SCAN_STATUS == 'scanned' }}
+        working-directory: repo
+        shell: bash
+        run: |
+          set -e
+          if [ -n "$VERSION" ] && [ "$VERSION" != "unknown" ]; then
+            git fetch --tags || true
+            git checkout "$VERSION" || git checkout "v$VERSION" || true
+          else
+            git fetch --tags || true
+            LATEST="$(git tag --list | sed -n 's/^v\\?\\([0-9].*\\)$/\\1/p' | sort -V | tail -n1)"
+            if [ -n "$LATEST" ]; then
+              git checkout "$LATEST" || git checkout "v$LATEST" || true
+              echo "LATEST_TAG=$LATEST" >> $GITHUB_ENV
+            else
+              echo "::notice::No tags found; scanning default branch HEAD."
+            fi
+          fi
+
+      - name: Run ScanCode (attribution & info)
+        if: ${{ env.SCAN_STATUS == 'scanned' }}
+        working-directory: scancode-toolkit
+        shell: bash
+        run: |
+          set -e
+          "$PWD/scancode" ${{ github.event.inputs.scan_options }} \
+            --json-pp "$GITHUB_WORKSPACE/scan_output.json" "$GITHUB_WORKSPACE/repo"
+
+      # === UPDATED: Merge AUTHORS under copyrights in enriched file ===
+      - name: Build enriched output (exact fields + copyrights incl. authors)
+        if: ${{ env.SCAN_STATUS == 'scanned' }}
+        shell: bash
+        run: |
+          set -e
+          python - <<'PY'
+          import json, os
+          # Preserve your fields exactly
+          comp = {
+            "Component": os.environ.get("COMPONENT"),
+            "version":   os.environ.get("VERSION"),
+            "Url":       os.environ.get("URL"),
+            "license":   os.environ.get("LICENSE"),
+            "S.No":      int(os.environ.get("SNO","0")),
+          }
+          # If version unknown/empty and we resolved latest tag, override
+          latest_tag = os.environ.get("LATEST_TAG")
+          ver = (comp.get("version") or "").strip().lower()
+          if ver in ("", "unknown") and latest_tag:
+            comp["version"] = latest_tag
+
+          # Collect COPYRIGHT statements and AUTHORS together under `copyrights`
+          copyrights = set()
+          out_scan = os.path.join(os.environ["GITHUB_WORKSPACE"], "scan_output.json")
+          if os.path.exists(out_scan):
+            with open(out_scan, "r", encoding="utf-8") as f:
+              data = json.load(f)
+            for fi in data.get("files", []):
+              # Copyright lines
+              for c in fi.get("copyrights", []):
+                v = (c.get("copyright") or "").strip()
+                if v:
+                  copyrights.add(v)
+              # Authors -> merge under copyrights (e.g., "Brad Conte" or with email)
+              for a in fi.get("authors", []):
+                v = (a.get("author") or "").strip()
+                if v:
+                  copyrights.add(v)
+
+          comp["copyrights"] = sorted(copyrights)
+
+          os.makedirs("out", exist_ok=True)
+          out_file = f'out/component-{comp["S.No"]}-{comp["Component"]}-enriched.json'
+          with open(out_file, "w", encoding="utf-8") as f:
+            json.dump(comp, f, indent=2)
+          PY
+
+      - name: Save raw ScanCode JSON (full data, no extra fields)
+        if: ${{ env.SCAN_STATUS == 'scanned' }}
+        shell: bash
+        run: |
+          set -e
+          mkdir -p out
+          cp "$GITHUB_WORKSPACE/scan_output.json" \
+             "out/component-${SNO}-${COMPONENT}-raw-scancode.json"
+
+      - name: Upload outputs (v4; suffix scanned/not-scanned)
+        uses: actions/upload-artifact@v4
+        with:
+          name: component-${{ env.SNO }}-${{ env.COMPONENT }}-${{ env.SCAN_STATUS }}
+          path: out
+          if-no-files-found: error
+          compression-level: 6
