@@ -34,6 +34,7 @@ jobs:
             exit 1
           fi
 
+          # Ensure it's ONE object
           TYPE=$(jq -r 'type' "$INPUT")
           if [ "$TYPE" != "object" ]; then
             echo "::error::Input must be a single JSON object (not an array)."
@@ -62,7 +63,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-        # ScanCode supports Python 3.9–3.13. (official docs)  # [1](https://stackoverflow.com/questions/79668405/github-actions-artifact-storage-quota-has-been-hit-even-after-deleting-all-art)
+        # ScanCode supports Python 3.9–3.13 (source install docs).  # [3](https://stackoverflow.com/questions/79668405/github-actions-artifact-storage-quota-has-been-hit-even-after-deleting-all-art)
 
       - name: Clone ScanCode Toolkit (git)
         shell: bash
@@ -71,9 +72,9 @@ jobs:
           git clone --depth=1 https://github.com/aboutcode-org/scancode-toolkit.git
           cd scancode-toolkit
           git fetch --tags
-          # Use a stable tag (adjust if you prefer a newer stable)
+          # Use a stable tag; adjust if you prefer newer stable
           git checkout v32.2.1
-        # Repo & releases reference.  # [3](https://docs.github.com/en/actions/tutorials/store-and-share-data)[4](https://github.blog/changelog/2023-12-14-github-actions-artifacts-v4-is-now-generally-available/)
+        # Repo & releases reference.  # [5](https://docs.github.com/en/actions/tutorials/store-and-share-data)[6](https://github.blog/changelog/2023-12-14-github-actions-artifacts-v4-is-now-generally-available/)
 
       - name: Configure & install ScanCode (source install)
         working-directory: scancode-toolkit
@@ -81,9 +82,8 @@ jobs:
         run: |
           set -e
           ./configure --with-defaults
-          # Quick sanity check
           ./scancode --help > /dev/null
-        # Source install documented by ScanCode.  # [1](https://stackoverflow.com/questions/79668405/github-actions-artifact-storage-quota-has-been-hit-even-after-deleting-all-art)
+        # Source install method per docs.  # [3](https://stackoverflow.com/questions/79668405/github-actions-artifact-storage-quota-has-been-hit-even-after-deleting-all-art)
 
       - name: Clone target repository
         shell: bash
@@ -111,7 +111,7 @@ jobs:
           fi
 
       - name: Run ScanCode (attribution & info)
-        # Run from the scancode-toolkit directory, scan the repo path, write output outside
+        # Run from scancode-toolkit directory, scan the repo path, write output to workspace
         working-directory: scancode-toolkit
         shell: bash
         run: |
@@ -131,14 +131,13 @@ jobs:
           with open(inp_path, "r", encoding="utf-8") as f:
             comp = json.load(f)
 
-          # If input version is unknown/empty, and we resolved a latest tag, override version
+          # Override version if we resolved a latest tag and input was unknown/empty
           latest_tag = os.environ.get("LATEST_TAG")
           ver = (comp.get("version") or "").strip().lower()
-          if ver == "" or ver == "unknown":
-              if latest_tag:
-                  comp["version"] = latest_tag
+          if ver in ("", "unknown") and latest_tag:
+              comp["version"] = latest_tag
 
-          # Collect COPYRIGHT statements only (authors not included in enriched file)
+          # Collect COPYRIGHT statements only (as requested)
           copyrights = set()
           out_scan = os.path.join(os.environ["GITHUB_WORKSPACE"], "scan_output.json")
           if os.path.exists(out_scan):
@@ -168,7 +167,16 @@ jobs:
           mkdir -p out
           cp "$GITHUB_WORKSPACE/scan_output.json" "out/component-${SNO}-${COMPONENT}-raw-scancode.json"
 
+      - name: List outputs (debug)
+        shell: bash
+        run: |
+          set -e
+          ls -al out || true
+
       - name: Upload outputs (v4, immediate)
         uses: actions/upload-artifact@v4
         with:
           name: component-${{ env.SNO }}-${{ env.COMPONENT }}
+          path: out
+          if-no-files-found: error
+          compression-level: 6
