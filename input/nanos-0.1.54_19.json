@@ -1,0 +1,135 @@
+[
+  {
+    "Component": "amzn-drivers",
+    "version": "unknown",
+    "Url": "https://github.com/amzn/amzn-drivers",
+    "license": "BSD-2-Clause AND BSD-3-Clause",
+    "S.No": 1
+  },
+  {
+    "Component": "clang-format-hooks",
+    "version": "unknown",
+    "Url": "https://github.com/barisione/clang-format-hooks",
+    "license": "MIT",
+    "S.No": 2
+  },
+  {
+    "Component": "colorstring",
+    "version": "v0.0.0-20190213212951-d06e56a500db",
+    "Url": "",
+    "license": "MIT",
+    "S.No": 3
+  },
+  {
+    "Component": "crypto",
+    "version": "v0.35.0",
+    "Url": "",
+    "license": "BSD-3-Clause",
+    "S.No": 4
+  },
+  {
+    "Component": "crypto-algorithms",
+    "version": "unknown",
+    "Url": "https://github.com/B-Con/crypto-algorithms",
+    "license": "LicenseRef-public-domain",
+    "S.No": 5
+  },
+  {
+    "Component": "errors",
+    "version": "v1.0.1",
+    "Url": "",
+    "license": "MIT",
+    "S.No": 6
+  },
+  {
+    "Component": "freebsd-src",
+    "version": "unknown",
+    "Url": "https://github.com/freebsd/freebsd-src/",
+    "license": "BSD-2-Clause AND BSD-3-Clause",
+    "S.No": 7
+  },
+  {
+    "Component": "go-runewidth",
+    "version": "v0.0.10",
+    "Url": "",
+    "license": "MIT",
+    "S.No": 8
+  },
+  {
+    "Component": "linux",
+    "version": "unknown",
+    "Url": "https://github.com/torvalds/linux/",
+    "license": "GPL-2.0-only",
+    "S.No": 9
+  },
+  {
+    "Component": "lwip",
+    "version": "unknown",
+    "Url": "https://github.com/lwip-tcpip/lwip",
+    "license": "BSD-3-Clause",
+    "S.No": 10
+  },
+  {
+    "Component": "nanos",
+    "version": "0.1.54",
+    "Url": "https://github.com/nanovms/nanos",
+    "license": "Apache-2.0",
+    "S.No": 11
+  },
+  {
+    "Component": "opensbi",
+    "version": "unknown",
+    "Url": "https://github.com/starfive-tech/opensbi",
+    "license": "BSD-2-Clause",
+    "S.No": 12
+  },
+  {
+    "Component": "sys",
+    "version": "v0.30.0",
+    "Url": "",
+    "license": "BSD-3-Clause",
+    "S.No": 13
+  },
+  {
+    "Component": "tablewriter",
+    "version": "v0.0.4",
+    "Url": "",
+    "license": "MIT",
+    "S.No": 14
+  },
+  {
+    "Component": "term",
+    "version": "v0.29.0",
+    "Url": "",
+    "license": "BSD-3-Clause",
+    "S.No": 15
+  },
+  {
+    "Component": "uniseg",
+    "version": "v0.2.0",
+    "Url": "",
+    "license": "MIT",
+    "S.No": 16
+  },
+  {
+    "Component": "v3",
+    "version": "v3.7.3",
+    "Url": "",
+    "license": "MIT",
+    "S.No": 17
+  },
+  {
+    "Component": "vmxnet3",
+    "version": "unknown",
+    "Url": "https://git.dpdk.org/dpdk/tree/drivers/net/vmxnet3",
+    "license": "BSD-3-Clause",
+    "S.No": 18
+  },
+  {
+    "Component": "xen",
+    "version": "unknown",
+    "Url": "https://github.com/xen-project/xen",
+    "license": "MIT",
+    "S.No": 19
+  }
+]
