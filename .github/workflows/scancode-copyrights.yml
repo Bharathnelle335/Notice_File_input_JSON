@@ -1,5 +1,5 @@
 
-name: ScanCode copyrights/authors (Docker, paged & parallel)
+name: ScanCode copyrights/authors (source install, paged & parallel)
 
 on:
   workflow_dispatch:
@@ -31,12 +31,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Echo input path to outputs for reuse
+      - name: Echo input path
         id: echo
-        run: |
-          echo "components_file=${{ github.event.inputs.components_file }}" >> "$GITHUB_OUTPUT"
+        run: echo "components_file=${{ github.event.inputs.components_file }}" >> "$GITHUB_OUTPUT"
 
-      - name: Validate & read input components (dynamic path)
+      - name: Validate & build dynamic matrix (wrap in {include:[...]})
         id: build
         shell: bash
         run: |
@@ -46,14 +45,9 @@ jobs:
             echo "::error::Input file not found: $INPUT"
             exit 1
           fi
-          # Build matrix entries from input (keep key fields to reconstruct later)
-          MATRIX=$(jq -c '[ .[] | { 
-              Component: .Component, 
-              Url: .Url, 
-              version: .version, 
-              license: .license, 
-              SNo: (."S.No") 
-            } ]' "$INPUT")
+          MATRIX=$(jq -c '{ include: [ .[] 
+            | select(.Url != null and .Url != "") 
+            | { Component: .Component, Url: .Url, version: .version, license: .license, SNo: (."S.No") } ] }' "$INPUT")
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
 
       - name: Count components
@@ -63,28 +57,54 @@ jobs:
           COUNT=$(jq 'length' "$INPUT")
           echo "count=$COUNT" >> "$GITHUB_OUTPUT"
 
-  build-image:
+      - name: Debug matrix
+        run: |
+          echo '${{ steps.build.outputs.matrix }}' | jq .
+
+  build-scancode:
     runs-on: ubuntu-latest
     needs: prepare-matrix
+    outputs:
+      scancode_path: ${{ steps.paths.outputs.scancode_path }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Clone ScanCode Toolkit (official)
-        run: git clone --depth=1 https://github.com/aboutcode-org/scancode-toolkit.git
-        # Docs (Docker option explained) [5](https://github.blog/news-insights/product-news/get-started-with-v4-of-github-actions-artifacts/)[6](https://eyindia-my.sharepoint.com/personal/bharath_n3_in_ey_com/Documents/Microsoft%20Copilot%20Chat%20Files/spdx-lite.json)
+      - name: Set up Python (3.11)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+        # ScanCode supports Python 3.9–3.13. [4](https://scancode-toolkit.readthedocs.io/en/stable/getting-started/install.html)[6](https://deepwiki.com/aboutcode-org/scancode-toolkit/6-installation-and-setup)
 
-      - name: Build Docker image
-        run: docker build -t scancode:latest scancode-toolkit
+      - name: Clone ScanCode Toolkit (git)
+        run: |
+          git clone --depth=1 https://github.com/aboutcode-org/scancode-toolkit.git
+          cd scancode-toolkit
+          # Checkout the requested version
+          git fetch --tags
+          git checkout v32.2.1
+        # Project repo and releases reference. [1](https://github.com/aboutcode-org/scancode-toolkit/)[2](https://github.com/aboutcode-org/scancode-toolkit/releases)[3](https://github.com/fosslight/fosslight_source_scanner/issues/179)
+
+      - name: Configure & install (source install)
+        run: |
+          cd scancode-toolkit
+          ./configure --with-defaults
+        # Source install via configure script as documented. [4](https://scancode-toolkit.readthedocs.io/en/stable/getting-started/install.html)
+
+      - name: Resolve scancode binary path
+        id: paths
+        shell: bash
+        run: |
+          # On source install, ./scancode is the entry script inside repo
+          echo "scancode_path=$PWD/scancode-toolkit/scancode" >> "$GITHUB_OUTPUT"
 
   scan-component:
     runs-on: ubuntu-latest
-    needs: [prepare-matrix, build-image]
+    needs: [prepare-matrix, build-scancode]
     strategy:
       fail-fast: false
       max-parallel: ${{ github.event.inputs.page_size }}
-      matrix:
-        include: ${{ fromJson(needs.prepare-matrix.outputs.matrix) }}
+      matrix: ${{ fromJson(needs.prepare-matrix.outputs.matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -99,17 +119,18 @@ jobs:
             mkdir -p repo; 
           }
 
-      - name: Run ScanCode (Docker)
+      - name: Run ScanCode (source install, direct CLI)
         shell: bash
         run: |
           set -e
           mkdir -p out
-          docker run --rm -v "$PWD/repo":/scan scancode:latest \
-            ${{ github.event.inputs.scan_options }} \
-            --json-pp /scan_output.json /scan || true
+          SCANCODE="${{ needs.build-scancode.outputs.scancode_path }}"
+          # Run ScanCode with provided options; output pretty JSON
+          "$SCANCODE" ${{ github.event.inputs.scan_options }} \
+            --json-pp scan_output.json repo || true
 
           python - <<'PY'
-          import json, os, glob
+          import json, os
           comp = {
             "Component": os.environ.get("COMPONENT"),
             "version": os.environ.get("VERSION"),
@@ -118,11 +139,12 @@ jobs:
             "S.No": int(os.environ.get("SNO", "0")),
           }
           copyrights, authors = set(), set()
-          path = "/scan_output.json"
-          if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
+          p = "scan_output.json"
+          if os.path.exists(p):
+            with open(p, "r", encoding="utf-8") as f:
               data = json.load(f)
             for fi in data.get("files", []):
+              # File-level attributes per ScanCode docs
               for c in fi.get("copyrights", []):
                 val = (c.get("value") or c.get("copyright") or "").strip()
                 if val: copyrights.add(val)
@@ -142,14 +164,14 @@ jobs:
           URL:       ${{ matrix.Url }}
           LICENSE:   ${{ matrix.license }}
           SNO:       ${{ matrix.SNo }}
-        # Scan options reference (copyrights, authors via --copyright). [7](https://michaelheap.com/dynamic-matrix-generation-github-actions/)
+        # CLI option references for copyrights/authors and info. [7](https://scancode-toolkit.readthedocs.io/en/stable/cli-reference/basic-options.html)[8](https://scancode-toolkit.readthedocs.io/en/latest/cli-reference/index.html)
 
-      - name: Upload per-component artifact
+      - name: Upload per-component artifact (v4, immediate)
         uses: actions/upload-artifact@v4
         with:
           name: component-${{ matrix.SNo }}-${{ matrix.Component }}
           path: out
-        # v4 immediate availability & job scoping. [3](blob:https://m365.cloud.microsoft/dfd6401d-3874-43c4-8572-9a60ca23e79c)
+        # Artifacts v4 are immediately available per job. [9](blob:https://m365.cloud.microsoft/dfd6401d-3874-43c4-8572-9a60ca23e79c)
 
   aggregate:
     runs-on: ubuntu-latest
@@ -158,11 +180,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download all component artifacts
+      - name: Download all component artifacts (merge)
         uses: actions/download-artifact@v4
         with:
           pattern: component-*
           merge-multiple: true
+        # v4 pattern + merge-multiple for efficient aggregation. [9](blob:https://m365.cloud.microsoft/dfd6401d-3874-43c4-8572-9a60ca23e79c)
 
       - name: Merge back into original list (dynamic input path)
         id: merge
@@ -175,13 +198,11 @@ jobs:
           inp = os.environ["INPUT"]
           with open(inp, "r", encoding="utf-8") as f:
             components = json.load(f)
-
           enriched = {}
           for path in glob.glob("**/component-*.json", recursive=True):
             with open(path, "r", encoding="utf-8") as f:
               obj = json.load(f)
               enriched[obj["S.No"]] = obj
-
           out = []
           for item in components:
             sno = item.get("S.No")
@@ -190,7 +211,6 @@ jobs:
             merged["copyrights"] = add.get("copyrights", [])
             merged["authors"]    = add.get("authors", [])
             out.append(merged)
-
           base, ext = os.path.splitext(inp)
           final_name = f"{base}-with-copyrights-{len(out)}{ext or '.json'}"
           with open(final_name, "w", encoding="utf-8") as f:
@@ -204,3 +224,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: components-with-copyrights
+          path: ${{ steps.merge.outputs }}
