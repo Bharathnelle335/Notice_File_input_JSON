@@ -5,8 +5,8 @@ on:
   workflow_dispatch:
     inputs:
       components_file:
-        description: "Path to input components JSON (from previous step)"
-        default: "components.json"
+        description: "Path to input components JSON (default: input/components.json)"
+        default: "input/components.json"
         required: true
         type: string
       page_size:
@@ -21,23 +21,32 @@ on:
         type: string
 
 jobs:
-  # 1) Prepare a dynamic matrix of components that have a Git URL
   prepare-matrix:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.build.outputs.matrix }}
       count: ${{ steps.count.outputs.count }}
+      components_file: ${{ steps.echo.outputs.components_file }}
     steps:
-      - name: Checkout workflow repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Read input components and build dynamic matrix
+      - name: Echo input path to outputs for reuse
+        id: echo
+        run: |
+          echo "components_file=${{ github.event.inputs.components_file }}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate & read input components (dynamic path)
         id: build
         shell: bash
         run: |
           set -e
           INPUT="${{ github.event.inputs.components_file }}"
-          # Filter components with a non-empty Url; keep all fields for later
+          if [ ! -f "$INPUT" ]; then
+            echo "::error::Input file not found: $INPUT"
+            exit 1
+          fi
+          # Build matrix entries from input (keep key fields to reconstruct later)
           MATRIX=$(jq -c '[ .[] | { 
               Component: .Component, 
               Url: .Url, 
@@ -54,39 +63,33 @@ jobs:
           COUNT=$(jq 'length' "$INPUT")
           echo "count=$COUNT" >> "$GITHUB_OUTPUT"
 
-  # 2) Build the ScanCode Docker image from the official repo Dockerfile
   build-image:
     runs-on: ubuntu-latest
     needs: prepare-matrix
     steps:
-      - name: Checkout workflow repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Clone ScanCode Toolkit (official)
-        run: |
-          git clone --depth=1 https://github.com/aboutcode-org/scancode-toolkit.git
-        # Docs: build from the included Dockerfile
-        # Ref: Comprehensive install & Docker path (official docs) [2](https://scancode-toolkit.readthedocs.io/en/latest/getting-started/install.html)[3](https://github.com/aboutcode-org/scancode-toolkit/blob/develop/docs/source/getting-started/install.rst)
+        run: git clone --depth=1 https://github.com/aboutcode-org/scancode-toolkit.git
+        # Docs (Docker option explained) [5](https://github.blog/news-insights/product-news/get-started-with-v4-of-github-actions-artifacts/)[6](https://eyindia-my.sharepoint.com/personal/bharath_n3_in_ey_com/Documents/Microsoft%20Copilot%20Chat%20Files/spdx-lite.json)
 
       - name: Build Docker image
-        run: |
-          docker build -t scancode:latest scancode-toolkit
+        run: docker build -t scancode:latest scancode-toolkit
 
-  # 3) Fan-out: one job per component (parallel limited by page_size)
   scan-component:
     runs-on: ubuntu-latest
     needs: [prepare-matrix, build-image]
     strategy:
       fail-fast: false
-      # "Pages" => limit concurrent component scans to page_size
       max-parallel: ${{ github.event.inputs.page_size }}
       matrix:
         include: ${{ fromJson(needs.prepare-matrix.outputs.matrix) }}
     steps:
-      - name: Checkout workflow repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Clone target repository (depth=1)
+      - name: Clone target repository
         if: ${{ matrix.Url != '' }}
         shell: bash
         run: |
@@ -96,18 +99,17 @@ jobs:
             mkdir -p repo; 
           }
 
-      - name: Run ScanCode in Docker (copyrights/authors)
+      - name: Run ScanCode (Docker)
         shell: bash
         run: |
           set -e
           mkdir -p out
-          # Run ScanCode; options are configurable via workflow input
           docker run --rm -v "$PWD/repo":/scan scancode:latest \
             ${{ github.event.inputs.scan_options }} \
             --json-pp /scan_output.json /scan || true
-          # Extract aggregated copyrights/authors and create enriched component JSON
+
           python - <<'PY'
-          import json, os
+          import json, os, glob
           comp = {
             "Component": os.environ.get("COMPONENT"),
             "version": os.environ.get("VERSION"),
@@ -120,15 +122,13 @@ jobs:
           if os.path.exists(path):
             with open(path, "r", encoding="utf-8") as f:
               data = json.load(f)
-            # ScanCode JSON typically contains a "files" list with per-file detections
-            # We consolidate unique values across all files
             for fi in data.get("files", []):
               for c in fi.get("copyrights", []):
-                val = c.get("value") or c.get("copyright") or ""
-                if val.strip(): copyrights.add(val.strip())
+                val = (c.get("value") or c.get("copyright") or "").strip()
+                if val: copyrights.add(val)
               for a in fi.get("authors", []):
-                val = a.get("value") or a.get("author") or ""
-                if val.strip(): authors.add(val.strip())
+                val = (a.get("value") or a.get("author") or "").strip()
+                if val: authors.add(val)
           comp["copyrights"] = sorted(copyrights)
           comp["authors"] = sorted(authors)
           os.makedirs("out", exist_ok=True)
@@ -142,50 +142,46 @@ jobs:
           URL:       ${{ matrix.Url }}
           LICENSE:   ${{ matrix.license }}
           SNO:       ${{ matrix.SNo }}
-        # CLI options: copyrights (and authors) are detected with --copyright; see ScanCode docs. [1](https://scancode-toolkit.readthedocs.io/en/latest/tutorials/how_to_set_what_will_be_detected_in_a_scan.html)[11](https://scancode-toolkit.readthedocs.io/en/stable/getting-started/home.html)
+        # Scan options reference (copyrights, authors via --copyright). [7](https://michaelheap.com/dynamic-matrix-generation-github-actions/)
 
-      - name: Upload per-component artifact (immediately available with v4)
+      - name: Upload per-component artifact
         uses: actions/upload-artifact@v4
         with:
-          # Make artifact discoverable per component
           name: component-${{ matrix.SNo }}-${{ matrix.Component }}
           path: out
-        # Artifacts v4 are job-scoped & immediately downloadable; use v4. [8](https://github.blog/changelog/2023-12-14-github-actions-artifacts-v4-is-now-generally-available/)[9](https://github.com/actions/upload-artifact)
+        # v4 immediate availability & job scoping. [3](blob:https://m365.cloud.microsoft/dfd6401d-3874-43c4-8572-9a60ca23e79c)
 
-  # 4) Aggregate all component outputs into a single enriched JSON
   aggregate:
     runs-on: ubuntu-latest
     needs: scan-component
     steps:
-      - name: Checkout workflow repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download all component artifacts (v4 pattern + merge)
+      - name: Download all component artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: component-*
           merge-multiple: true
-        # Pattern + merge-multiple are v4 features for efficient aggregation. [8](https://github.blog/changelog/2023-12-14-github-actions-artifacts-v4-is-now-generally-available/)
 
-      - name: Merge back into original list (preserve order, add fields)
+      - name: Merge back into original list (dynamic input path)
         id: merge
         shell: bash
         run: |
           set -e
-          INPUT="${{ github.event.inputs.components_file }}"
-          COUNT="${{ needs.prepare-matrix.outputs.count }}"
+          INPUT="${{ needs.prepare-matrix.outputs.components_file }}"
           python - <<'PY'
-          import json, glob, os, sys
+          import json, glob, os
           inp = os.environ["INPUT"]
           with open(inp, "r", encoding="utf-8") as f:
             components = json.load(f)
-          # Index artifacts by S.No
+
           enriched = {}
           for path in glob.glob("**/component-*.json", recursive=True):
             with open(path, "r", encoding="utf-8") as f:
               obj = json.load(f)
               enriched[obj["S.No"]] = obj
-          # Merge into original sequence, add fields if available
+
           out = []
           for item in components:
             sno = item.get("S.No")
@@ -194,7 +190,7 @@ jobs:
             merged["copyrights"] = add.get("copyrights", [])
             merged["authors"]    = add.get("authors", [])
             out.append(merged)
-          # Name the final file with count appended
+
           base, ext = os.path.splitext(inp)
           final_name = f"{base}-with-copyrights-{len(out)}{ext or '.json'}"
           with open(final_name, "w", encoding="utf-8") as f:
@@ -202,7 +198,7 @@ jobs:
           print(final_name)
           PY
         env:
-          INPUT: ${{ github.event.inputs.components_file }}
+          INPUT: ${{ needs.prepare-matrix.outputs.components_file }}
 
       - name: Upload aggregated JSON
         uses: actions/upload-artifact@v4
