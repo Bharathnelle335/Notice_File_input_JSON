@@ -1,5 +1,5 @@
 
-name: ScanCode copyrights/authors (source install, paged & parallel)
+name: ScanCode copyrights/authors (source install, full parallel)
 
 on:
   workflow_dispatch:
@@ -9,11 +9,7 @@ on:
         default: "input/components.json"
         required: true
         type: string
-      page_size:
-        description: "How many components to scan in parallel (page size)"
-        default: 8
-        required: true
-        type: number
+      # page_size removed (not needed when running everything concurrently)
       scan_options:
         description: "ScanCode options (space-separated)"
         default: "--copyright --info"
@@ -74,28 +70,26 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-        # ScanCode supports Python 3.9–3.13. [4](https://scancode-toolkit.readthedocs.io/en/stable/getting-started/install.html)[6](https://deepwiki.com/aboutcode-org/scancode-toolkit/6-installation-and-setup)
+        # ScanCode supports Python 3.9–3.13. [3](blob:https://m365.cloud.microsoft/595628d9-a8c8-4019-a693-327216579b68)[4](blob:https://m365.cloud.microsoft/68941719-015b-4cd9-b92b-3c4176910543)
 
       - name: Clone ScanCode Toolkit (git)
         run: |
           git clone --depth=1 https://github.com/aboutcode-org/scancode-toolkit.git
           cd scancode-toolkit
-          # Checkout the requested version
           git fetch --tags
           git checkout v32.2.1
-        # Project repo and releases reference. [1](https://github.com/aboutcode-org/scancode-toolkit/)[2](https://github.com/aboutcode-org/scancode-toolkit/releases)[3](https://github.com/fosslight/fosslight_source_scanner/issues/179)
+        # Project repo & releases refs. [5](blob:https://m365.cloud.microsoft/f17acca1-bb94-45b9-ac50-5539812c1130)[6](blob:https://m365.cloud.microsoft/327b8b89-159c-4e89-8b9f-db9155df617e)
 
       - name: Configure & install (source install)
         run: |
           cd scancode-toolkit
           ./configure --with-defaults
-        # Source install via configure script as documented. [4](https://scancode-toolkit.readthedocs.io/en/stable/getting-started/install.html)
+        # Source install via configure script. [3](blob:https://m365.cloud.microsoft/595628d9-a8c8-4019-a693-327216579b68)
 
       - name: Resolve scancode binary path
         id: paths
         shell: bash
         run: |
-          # On source install, ./scancode is the entry script inside repo
           echo "scancode_path=$PWD/scancode-toolkit/scancode" >> "$GITHUB_OUTPUT"
 
   scan-component:
@@ -103,7 +97,7 @@ jobs:
     needs: [prepare-matrix, build-scancode]
     strategy:
       fail-fast: false
-      max-parallel: ${{ github.event.inputs.page_size }}
+      # NO max-parallel -> run all matrix jobs at once (subject to runner limits). [1](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/run-job-variations)
       matrix: ${{ fromJson(needs.prepare-matrix.outputs.matrix) }}
     steps:
       - name: Checkout
@@ -125,7 +119,6 @@ jobs:
           set -e
           mkdir -p out
           SCANCODE="${{ needs.build-scancode.outputs.scancode_path }}"
-          # Run ScanCode with provided options; output pretty JSON
           "$SCANCODE" ${{ github.event.inputs.scan_options }} \
             --json-pp scan_output.json repo || true
 
@@ -144,7 +137,6 @@ jobs:
             with open(p, "r", encoding="utf-8") as f:
               data = json.load(f)
             for fi in data.get("files", []):
-              # File-level attributes per ScanCode docs
               for c in fi.get("copyrights", []):
                 val = (c.get("value") or c.get("copyright") or "").strip()
                 if val: copyrights.add(val)
@@ -164,14 +156,13 @@ jobs:
           URL:       ${{ matrix.Url }}
           LICENSE:   ${{ matrix.license }}
           SNO:       ${{ matrix.SNo }}
-        # CLI option references for copyrights/authors and info. [7](https://scancode-toolkit.readthedocs.io/en/stable/cli-reference/basic-options.html)[8](https://scancode-toolkit.readthedocs.io/en/latest/cli-reference/index.html)
 
       - name: Upload per-component artifact (v4, immediate)
         uses: actions/upload-artifact@v4
         with:
           name: component-${{ matrix.SNo }}-${{ matrix.Component }}
           path: out
-        # Artifacts v4 are immediately available per job. [9](blob:https://m365.cloud.microsoft/dfd6401d-3874-43c4-8572-9a60ca23e79c)
+        # Artifacts v4 are immediately available per job. [2](https://stackoverflow.com/questions/78999879/how-do-i-upload-artifacts-with-the-github-api-or-cli)
 
   aggregate:
     runs-on: ubuntu-latest
@@ -180,12 +171,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download all component artifacts (merge)
+      - name: Download all component artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: component-*
           merge-multiple: true
-        # v4 pattern + merge-multiple for efficient aggregation. [9](blob:https://m365.cloud.microsoft/dfd6401d-3874-43c4-8572-9a60ca23e79c)
+        # v4 pattern + merge-multiple for aggregation. [2](https://stackoverflow.com/questions/78999879/how-do-i-upload-artifacts-with-the-github-api-or-cli)
 
       - name: Merge back into original list (dynamic input path)
         id: merge
