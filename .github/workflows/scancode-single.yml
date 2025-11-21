@@ -5,35 +5,25 @@ on:
   workflow_dispatch:
     inputs:
       input_file:
-        description: "Path to the input JSON containing ONE component (default: input/component.json)"
+        description: "Path to the input JSON containing ONE component"
         default: "input/component.json"
         required: true
         type: string
       scan_options:
-        description: "ScanCode options (default tuned for attribution)"
+        description: "ScanCode options (tuned for attribution)"
         default: "--copyright --license --info --strip-root"
         required: true
         type: string
 
 jobs:
-  setup-input:
+  scan-single:
     runs-on: ubuntu-latest
-    outputs:
-      component: ${{ steps.read.outputs.component }}
-      version:   ${{ steps.read.outputs.version }}
-      url:       ${{ steps.read.outputs.url }}
-      license:   ${{ steps.read.outputs.license }}
-      sno:       ${{ steps.read.outputs.sno }}
-      input_file: ${{ steps.echo.outputs.input_file }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Echo input path
-        id: echo
-        run: echo "input_file=${{ github.event.inputs.input_file }}" >> "$GITHUB_OUTPUT"
-
-      - name: Validate input file and read fields (ONE object)
+      - name: Validate input & export fields (ONE object)
         id: read
         shell: bash
         run: |
@@ -44,38 +34,29 @@ jobs:
             exit 1
           fi
 
-          # Ensure it's ONE object (not an array)
           TYPE=$(jq -r 'type' "$INPUT")
           if [ "$TYPE" != "object" ]; then
-            echo "::error::Input must be a single JSON object, not an array."
+            echo "::error::Input must be a single JSON object (not an array)."
             exit 1
           fi
 
           COMPONENT=$(jq -r '.Component // empty' "$INPUT")
           VERSION=$(jq -r '.version   // empty' "$INPUT")
-          URL=$(jq -r '.Url        // empty' "$INPUT")
-          LICENSE=$(jq -r '.license   // empty' "$INPUT")
-          SNO=$(jq -r '."S.No"     // 0' "$INPUT")
+          URL=$(jq -r '.Url         // empty' "$INPUT")
+          LICENSE=$(jq -r '.license  // empty' "$INPUT")
+          SNO=$(jq -r '."S.No"      // 0' "$INPUT")
 
           if [ -z "$URL" ]; then
             echo "::error::Url is required in input to clone the repository."
             exit 1
           fi
 
-          echo "component=$COMPONENT" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION"     >> "$GITHUB_OUTPUT"
-          echo "url=$URL"             >> "$GITHUB_OUTPUT"
-          echo "license=$LICENSE"     >> "$GITHUB_OUTPUT"
-          echo "sno=$SNO"             >> "$GITHUB_OUTPUT"
-
-  build-scancode:
-    runs-on: ubuntu-latest
-    needs: setup-input
-    outputs:
-      scancode_path: ${{ steps.paths.outputs.scancode_path }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+          echo "COMPONENT=$COMPONENT" >> $GITHUB_ENV
+          echo "VERSION=$VERSION"     >> $GITHUB_ENV
+          echo "URL=$URL"             >> $GITHUB_ENV
+          echo "LICENSE=$LICENSE"     >> $GITHUB_ENV
+          echo "SNO=$SNO"             >> $GITHUB_ENV
+          echo "INPUT_FILE=$INPUT"    >> $GITHUB_ENV
 
       - name: Set up Python (3.11)
         uses: actions/setup-python@v5
@@ -84,51 +65,35 @@ jobs:
         # ScanCode supports Python 3.9–3.13. (official docs)  # [1](https://stackoverflow.com/questions/79668405/github-actions-artifact-storage-quota-has-been-hit-even-after-deleting-all-art)
 
       - name: Clone ScanCode Toolkit (git)
+        shell: bash
         run: |
+          set -e
           git clone --depth=1 https://github.com/aboutcode-org/scancode-toolkit.git
           cd scancode-toolkit
           git fetch --tags
-          # Use a known good tag; change if you prefer another stable version
+          # Use a stable tag (adjust if you prefer a newer stable)
           git checkout v32.2.1
-        # Project repository & releases  # [3](https://docs.github.com/en/actions/tutorials/store-and-share-data)[4](https://github.blog/changelog/2023-12-14-github-actions-artifacts-v4-is-now-generally-available/)
+        # Repo & releases reference.  # [3](https://docs.github.com/en/actions/tutorials/store-and-share-data)[4](https://github.blog/changelog/2023-12-14-github-actions-artifacts-v4-is-now-generally-available/)
 
-      - name: Configure & install (source install)
-        run: |
-          cd scancode-toolkit
-          ./configure --with-defaults
-        # Source install method per docs  # [1](https://stackoverflow.com/questions/79668405/github-actions-artifact-storage-quota-has-been-hit-even-after-deleting-all-art)
-
-      - name: Resolve scancode binary path
-        id: paths
+      - name: Configure & install ScanCode (source install)
+        working-directory: scancode-toolkit
         shell: bash
-        run: echo "scancode_path=$PWD/scancode-toolkit/scancode" >> "$GITHUB_OUTPUT"
-
-  scan-and-output:
-    runs-on: ubuntu-latest
-    needs: [setup-input, build-scancode]
-    env:
-      COMPONENT: ${{ needs.setup-input.outputs.component }}
-      VERSION:   ${{ needs.setup-input.outputs.version }}
-      URL:       ${{ needs.setup-input.outputs.url }}
-      LICENSE:   ${{ needs.setup-input.outputs.license }}
-      SNO:       ${{ needs.setup-input.outputs.sno }}
-      INPUT_FILE: ${{ needs.setup-input.outputs.input_file }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+        run: |
+          set -e
+          ./configure --with-defaults
+          # Quick sanity check
+          ./scancode --help > /dev/null
+        # Source install documented by ScanCode.  # [1](https://stackoverflow.com/questions/79668405/github-actions-artifact-storage-quota-has-been-hit-even-after-deleting-all-art)
 
       - name: Clone target repository
         shell: bash
         run: |
           set -e
-          git clone --depth=1 "$URL" repo || { 
-            echo "::error::Clone failed for $URL"; 
-            exit 1; 
-          }
+          git clone --depth=1 "$URL" repo
 
-      - name: Checkout target ref (latest/stable if version not provided or unknown)
-        shell: bash
+      - name: Checkout requested or latest stable tag
         working-directory: repo
+        shell: bash
         run: |
           set -e
           if [ -n "$VERSION" ] && [ "$VERSION" != "unknown" ]; then
@@ -146,41 +111,44 @@ jobs:
           fi
 
       - name: Run ScanCode (attribution & info)
+        # Run from the scancode-toolkit directory, scan the repo path, write output outside
+        working-directory: scancode-toolkit
         shell: bash
         run: |
           set -e
-          SCANCODE="${{ needs.build-scancode.outputs.scancode_path }}"
-
-          # Use provided options (defaults: copyright, license, info, strip-root)
-          "$SCANCODE" ${{ github.event.inputs.scan_options }} \
-            --json-pp scan_output.json repo
+          "$PWD/scancode" ${{ github.event.inputs.scan_options }} \
+            --json-pp "$GITHUB_WORKSPACE/scan_output.json" "$GITHUB_WORKSPACE/repo"
 
       - name: Build enriched output (exact input + copyrights added)
         shell: bash
         run: |
           set -e
           python - <<'PY'
-          import json, os, sys
+          import json, os
+
           # Read original single-object input to preserve fields exactly
           inp_path = os.environ["INPUT_FILE"]
           with open(inp_path, "r", encoding="utf-8") as f:
             comp = json.load(f)
 
-          # Override version if we resolved a latest tag and input was unknown/empty
+          # If input version is unknown/empty, and we resolved a latest tag, override version
           latest_tag = os.environ.get("LATEST_TAG")
-          if (not comp.get("version")) or (str(comp.get("version")).strip().lower() == "unknown"):
+          ver = (comp.get("version") or "").strip().lower()
+          if ver == "" or ver == "unknown":
               if latest_tag:
                   comp["version"] = latest_tag
 
-          # Collect copyrights only (no authors in the enriched file)
+          # Collect COPYRIGHT statements only (authors not included in enriched file)
           copyrights = set()
-          if os.path.exists("scan_output.json"):
-              with open("scan_output.json","r",encoding="utf-8") as f:
+          out_scan = os.path.join(os.environ["GITHUB_WORKSPACE"], "scan_output.json")
+          if os.path.exists(out_scan):
+              with open(out_scan, "r", encoding="utf-8") as f:
                   data = json.load(f)
               for fi in data.get("files", []):
                   for c in fi.get("copyrights", []):
                       v = (c.get("copyright") or "").strip()
-                      if v: copyrights.add(v)
+                      if v:
+                          copyrights.add(v)
 
           comp["copyrights"] = sorted(copyrights)
 
@@ -188,7 +156,7 @@ jobs:
           os.makedirs("out", exist_ok=True)
           s_no = comp.get("S.No", 0)
           name = comp.get("Component") or "unknown"
-          out_file = f'out/component-{s_no}-{name}-enriched.json'
+          out_file = os.path.join("out", f"component-{s_no}-{name}-enriched.json")
           with open(out_file, "w", encoding="utf-8") as f:
               json.dump(comp, f, indent=2)
           PY
@@ -198,8 +166,7 @@ jobs:
         run: |
           set -e
           mkdir -p out
-          RAW_NAME="out/component-${SNO}-${COMPONENT}-raw-scancode.json"
-          cp scan_output.json "$RAW_NAME"
+          cp "$GITHUB_WORKSPACE/scan_output.json" "out/component-${SNO}-${COMPONENT}-raw-scancode.json"
 
       - name: Upload outputs (v4, immediate)
         uses: actions/upload-artifact@v4
