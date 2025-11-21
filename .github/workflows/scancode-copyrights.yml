@@ -1,5 +1,5 @@
 
-name: ScanCode multi-component (source install, full parallel, dual outputs)
+name: ScanCode multi-component (source install, full parallel, dual outputs, robust URL handling)
 
 on:
   workflow_dispatch:
@@ -16,7 +16,7 @@ on:
         type: string
 
 jobs:
-  # 1) Prepare a dynamic matrix from the input ARRAY (runs ALL at once)
+  # 1) Prepare a dynamic matrix from the ARRAY (run ALL at once)
   prepare-matrix:
     runs-on: ubuntu-latest
     outputs:
@@ -42,8 +42,8 @@ jobs:
             exit 1
           fi
 
-          # Build matrix as {"include": [ ... ]} with the fields you already use
-          MATRIX=$(jq -c '{ include: [ .[] 
+          # Build matrix as {"include":[ ... ]} with the exact fields you use
+          MATRIX=$(jq -c '{ include: [ .[]
             | { Component: .Component, Url: .Url, version: .version, license: .license, SNo: (."S.No") } ] }' "$INPUT")
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
 
@@ -51,19 +51,20 @@ jobs:
         run: |
           echo '${{ steps.build.outputs.matrix }}' | jq .
 
-  # 2) Scan each component in PARALLEL (each matrix job installs and runs ScanCode)
+  # 2) Scan each component in PARALLEL (matrix fan-out)
   scan-component:
     runs-on: ubuntu-latest
     needs: prepare-matrix
     strategy:
       fail-fast: false
-      # NO max-parallel -> let GitHub run as many concurrent matrix jobs as capacity allows
+      # No max-parallel: GitHub runs all matrix jobs concurrently up to capacity
       matrix: ${{ fromJson(needs.prepare-matrix.outputs.matrix) }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Export matrix fields to env
+      - name: Export matrix fields (and default status)
         shell: bash
         run: |
           echo "COMPONENT=${{ matrix.Component }}" >> $GITHUB_ENV
@@ -71,12 +72,14 @@ jobs:
           echo "URL=${{ matrix.Url }}"             >> $GITHUB_ENV
           echo "LICENSE=${{ matrix.license }}"     >> $GITHUB_ENV
           echo "SNO=${{ matrix.SNo }}"             >> $GITHUB_ENV
+          # default: not-scanned; set to 'scanned' only after successful clone
+          echo "SCAN_STATUS=not-scanned"           >> $GITHUB_ENV
 
       - name: Set up Python (3.11)
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-        # ScanCode supports Python 3.9–3.13 (source install docs).  # [1](https://stackoverflow.com/questions/79668405/github-actions-artifact-storage-quota-has-been-hit-even-after-deleting-all-art)
+        # ScanCode supports Python 3.9–3.13 (source-install docs).  # see docs [1](https://docs.github.com/en/actions/tutorials/store-and-share-data)
 
       - name: Clone ScanCode Toolkit (git)
         shell: bash
@@ -86,7 +89,7 @@ jobs:
           cd scancode-toolkit
           git fetch --tags
           git checkout v32.2.1
-        # Repo & releases reference.  # [4](https://docs.github.com/en/actions/tutorials/store-and-share-data)[5](https://github.blog/changelog/2023-12-14-github-actions-artifacts-v4-is-now-generally-available/)
+        # Project repo & releases reference [5](https://michaelheap.com/dynamic-matrix-generation-github-actions/)[6](https://stackoverflow.com/questions/79668405/github-actions-artifact-storage-quota-has-been-hit-even-after-deleting-all-art)
 
       - name: Configure & install ScanCode (source install)
         working-directory: scancode-toolkit
@@ -95,43 +98,73 @@ jobs:
           set -e
           ./configure --with-defaults
           ./scancode --help > /dev/null
-        # Source install method per docs.  # [1](https://stackoverflow.com/questions/79668405/github-actions-artifact-storage-quota-has-been-hit-even-after-deleting-all-art)
+        # Source install per official docs [1](https://docs.github.com/en/actions/tutorials/store-and-share-data)
 
-      - name: Handle missing URL (skip scan, still produce outputs)
-        if: ${{ !env.URL || env.URL == '' }}
+      # --- Missing/empty URL: skip scan and still produce two outputs
+      - name: Handle missing URL (skip scan)
+        if: ${{ env.URL == '' }}
         shell: bash
         run: |
           set -e
           mkdir -p out
-
-          # Enriched file: your input + copyrights []
           python - <<'PY'
           import json, os
           comp = {
             "Component": os.environ.get("COMPONENT"),
             "version":   os.environ.get("VERSION") or "unknown",
-            "Url":       os.environ.get("URL") or "unknown or not found",
+            "Url":       "unknown or not found",
             "license":   os.environ.get("LICENSE") or "unknown",
-            "S.No":      int(os.environ.get("SNO", "0")),
+            "S.No":      int(os.environ.get("SNO","0")),
+          }
+          # No scan -> no copyrights
+          comp["copyrights"] = []
+          out_file = f'out/component-{comp["S.No"]}-{comp["Component"]}-enriched.json'
+          with open(out_file, "w", encoding="utf-8") as f:
+            json.dump(comp, f, indent=2)
+          PY
+          echo '{"message":"Url not found; scan skipped"}' \
+            > "out/component-${SNO}-${COMPONENT}-raw-scancode.json"
+
+      # --- Try clone when URL is provided; mark scanned only if clone succeeds
+      - name: Clone target repository (try)
+        if: ${{ env.URL != '' }}
+        shell: bash
+        run: |
+          set -e
+          if git clone --depth=1 "$URL" repo; then
+            echo "SCAN_STATUS=scanned" >> $GITHUB_ENV
+          else
+            echo "::warning::Clone failed for $URL; will produce not-scanned outputs."
+            mkdir -p repo
+          fi
+
+      # --- If clone failed, produce not-scanned outputs now
+      - name: Produce not-scanned outputs (clone failed)
+        if: ${{ env.URL != '' && env.SCAN_STATUS == 'not-scanned' }}
+        shell: bash
+        run: |
+          set -e
+          mkdir -p out
+          python - <<'PY'
+          import json, os
+          comp = {
+            "Component": os.environ.get("COMPONENT"),
+            "version":   os.environ.get("VERSION") or "unknown",
+            "Url":       "unknown or not found",
+            "license":   os.environ.get("LICENSE") or "unknown",
+            "S.No":      int(os.environ.get("SNO","0")),
           }
           comp["copyrights"] = []
           out_file = f'out/component-{comp["S.No"]}-{comp["Component"]}-enriched.json'
           with open(out_file, "w", encoding="utf-8") as f:
             json.dump(comp, f, indent=2)
           PY
+          echo '{"message":"Url not found; scan skipped"}' \
+            > "out/component-${SNO}-${COMPONENT}-raw-scancode.json"
 
-          # Raw file: minimal JSON stating the URL is missing
-          echo '{"message":"Url not found; scan skipped"}' > "out/component-${SNO}-${COMPONENT}-raw-scancode.json"
-
-      - name: Clone target repository
-        if: ${{ env.URL && env.URL != '' }}
-        shell: bash
-        run: |
-          set -e
-          git clone --depth=1 "$URL" repo
-
+      # --- If scanned, continue: checkout version/latest tag, run ScanCode, produce outputs
       - name: Checkout requested or latest stable tag
-        if: ${{ env.URL && env.URL != '' }}
+        if: ${{ env.SCAN_STATUS == 'scanned' }}
         working-directory: repo
         shell: bash
         run: |
@@ -151,7 +184,7 @@ jobs:
           fi
 
       - name: Run ScanCode (attribution & info)
-        if: ${{ env.URL && env.URL != '' }}
+        if: ${{ env.SCAN_STATUS == 'scanned' }}
         working-directory: scancode-toolkit
         shell: bash
         run: |
@@ -159,15 +192,13 @@ jobs:
           "$PWD/scancode" ${{ github.event.inputs.scan_options }} \
             --json-pp "$GITHUB_WORKSPACE/scan_output.json" "$GITHUB_WORKSPACE/repo"
 
-      - name: Build enriched output (exact input + copyrights added)
-        if: ${{ env.URL && env.URL != '' }}
+      - name: Build enriched output (exact fields + copyrights)
+        if: ${{ env.SCAN_STATUS == 'scanned' }}
         shell: bash
         run: |
           set -e
           python - <<'PY'
           import json, os
-
-          # Construct object from env (same fields as your working setup)
           comp = {
             "Component": os.environ.get("COMPONENT"),
             "version":   os.environ.get("VERSION"),
@@ -175,14 +206,11 @@ jobs:
             "license":   os.environ.get("LICENSE"),
             "S.No":      int(os.environ.get("SNO","0")),
           }
-
-          # Override version if we resolved a latest tag and input was unknown/empty
           latest_tag = os.environ.get("LATEST_TAG")
           ver = (comp.get("version") or "").strip().lower()
           if ver in ("", "unknown") and latest_tag:
               comp["version"] = latest_tag
 
-          # Collect COPYRIGHT statements only (authors not included in enriched file)
           copyrights = set()
           out_scan = os.path.join(os.environ["GITHUB_WORKSPACE"], "scan_output.json")
           if os.path.exists(out_scan):
@@ -196,7 +224,6 @@ jobs:
 
           comp["copyrights"] = sorted(copyrights)
 
-          # Write enriched file
           os.makedirs("out", exist_ok=True)
           out_file = f'out/component-{comp["S.No"]}-{comp["Component"]}-enriched.json'
           with open(out_file, "w", encoding="utf-8") as f:
@@ -204,23 +231,18 @@ jobs:
           PY
 
       - name: Save raw ScanCode JSON (full data, no extra fields)
-        if: ${{ env.URL && env.URL != '' }}
+        if: ${{ env.SCAN_STATUS == 'scanned' }}
         shell: bash
         run: |
           set -e
           mkdir -p out
-          cp "$GITHUB_WORKSPACE/scan_output.json" "out/component-${SNO}-${COMPONENT}-raw-scancode.json"
+          cp "$GITHUB_WORKSPACE/scan_output.json" \
+             "out/component-${SNO}-${COMPONENT}-raw-scancode.json"
 
-      - name: List outputs (debug)
-        shell: bash
-        run: |
-          set -e
-          ls -al out || true
-
-      - name: Upload outputs (v4, immediate)
+      - name: Upload outputs (v4; suffix scanned/not-scanned)
         uses: actions/upload-artifact@v4
         with:
-          name: component-${{ env.SNO }}-${{ env.COMPONENT }}
+          name: component-${{ env.SNO }}-${{ env.COMPONENT }}-${{ env.SCAN_STATUS }}
           path: out
           if-no-files-found: error
           compression-level: 6
