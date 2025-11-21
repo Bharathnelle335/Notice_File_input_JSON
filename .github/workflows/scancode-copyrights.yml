@@ -6,7 +6,7 @@ on:
     inputs:
       components_file:
         description: "Path to input components JSON (default: input/components.json)"
-        default: "input/components.json"
+        default: "input/nanos-0.1.54_19.json"
         required: true
         type: string
       # page_size removed (not needed when running everything concurrently)
