@@ -1,0 +1,52 @@
+
+[
+  {
+    "Component": "gotest.tools",
+    "version": "v2.2.0+incompatible",
+    "Url": "https://github.com/gotestyourself/gotest.tools",
+    "license": "Apache-2.0",
+    "S.No": 1
+  },
+  {
+    "Component": "inf",
+    "version": "v0.9.1",
+    "Url": "https://github.com/go-inf/inf",
+    "license": "BSD-3-Clause",
+    "S.No": 2
+  },
+  {
+    "Component": "ini",
+    "version": "v1.62.0",
+    "Url": "https://github.com/go-ini/ini",
+    "license": "Apache-2.0",
+    "S.No": 3
+  },
+  {
+    "Component": "qemu",
+    "version": "v2.11.1",
+    "Url": "https://github.com/qemu/qemu",
+    "license": "GPL-2.0-or-later",
+    "S.No": 4
+  },
+  {
+    "Component": "yaml",
+    "version": "v2.2.2",
+    "Url": "https://github.com/go-yaml/yaml",
+    "license": "Apache-2.0",
+    "S.No": 5
+  },
+  {
+    "Component": "yaml",
+    "version": "v3.0.0-20200313102051-9f266ea9e77c",
+    "Url": "https://github.com/go-yaml/yaml",
+    "license": "Apache-2.0 AND MIT",
+    "S.No": 6
+  },
+  {
+    "Component": "zap",
+    "version": "v1.17.0",
+    "Url": "https://github.com/uber-go/zap",
+    "license": "MIT",
+    "S.No": 7
+  }
+]
