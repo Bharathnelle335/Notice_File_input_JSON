@@ -1,0 +1,311 @@
+
+[
+  {
+    "Component": "atomic",
+    "version": "v1.7.0",
+    "Url": "https://github.com/uber-go/atomic",
+    "license": "MIT",
+    "S.No": 1
+  },
+  {
+    "Component": "binaryregexp",
+    "version": "v0.2.0",
+    "Url": "https://github.com/rsc/binaryregexp",
+    "license": "BSD-3-Clause",
+    "S.No": 2
+  },
+  {
+    "Component": "cli",
+    "version": "v1.0.0",
+    "Url": "https://github.com/mitchellh/cli",
+    "license": "MPL-2.0",
+    "S.No": 3
+  },
+  {
+    "Component": "errgo",
+    "version": "v2.1.0",
+    "Url": "https://github.com/go-errgo",
+    "license": "BSD-3-Clause",
+    "S.No": 4
+  },
+  {
+    "Component": "errwrap",
+    "version": "v1.0.0",
+    "Url": "https://github.com/hashicorp/errwrap",
+    "license": "MPL-2.0",
+    "S.No": 5
+  },
+  {
+    "Component": "fsnotify",
+    "version": "v1.4.7",
+    "Url": "https://github.com/fsnotify/fsnotify",
+    "license": "BSD-3-Clause",
+    "S.No": 6
+  },
+  {
+    "Component": "udpa",
+    "version": "v0.0.0-20201120205902-5459f2c99403",
+    "Url": "https://github.com/cncf/udpa",
+    "license": "Apache-2.0",
+    "S.No": 7
+  },
+  {
+    "Component": "go",
+    "version": "v0.57.0",
+    "Url": "https://github.com/googleapis/google-cloud-go",
+    "license": "Apache-2.0",
+    "S.No": 8
+  },
+  {
+    "Component": "go-multierror",
+    "version": "v1.0.0",
+    "Url": "https://github.com/hashicorp/go-multierror",
+    "license": "MPL-2.0",
+    "S.No": 9
+  },
+  {
+    "Component": "go-rootcerts",
+    "version": "v1.0.0",
+    "Url": "https://github.com/hashicorp/go-rootcerts",
+    "license": "MPL-2.0",
+    "S.No": 10
+  },
+  {
+    "Component": "go-spin",
+    "version": "v1.1.0",
+    "Url": "https://github.com/tj/go-spin",
+    "license": "MIT",
+    "S.No": 11
+  },
+  {
+    "Component": "go-uuid",
+    "version": "v1.0.1",
+    "Url": "https://github.com/hashicorp/go-uuid",
+    "license": "MPL-2.0",
+    "S.No": 12
+  },
+  {
+    "Component": "go-virtualbox",
+    "version": "v0.0.4",
+    "Url": "https://github.com/terra-farm/go-virtualbox",
+    "license": "Apache-2.0",
+    "S.No": 13
+  },
+  {
+    "Component": "go.opencensus.io",
+    "version": "v0.22.2",
+    "Url": "https://github.com/census-instrumentation/opencensus-go",
+    "license": "Apache-2.0",
+    "S.No": 14
+  },
+  {
+    "Component": "goe",
+    "version": "v0.0.0-20180627143212-57f6aae5913c",
+    "Url": "https://github.com/pascaldekloe/goe",
+    "license": "CC0-1.0",
+    "S.No": 15
+  },
+  {
+    "Component": "golang-lru",
+    "version": "v0.5.0",
+    "Url": "https://github.com/hashicorp/golang-lru",
+    "license": "MPL-2.0",
+    "S.No": 16
+  },
+  {
+    "Component": "gotest.tools",
+    "version": "v2.2.0+incompatible",
+    "Url": "https://github.com/gotestyourself",
+    "license": "Apache-2.0",
+    "S.No": 17
+  },
+  {
+    "Component": "gox",
+    "version": "v0.4.0",
+    "Url": "https://github.com/mitchellh/gox",
+    "license": "MPL-2.0",
+    "S.No": 18
+  },
+  {
+    "Component": "hcl",
+    "version": "v1.0.0",
+    "Url": "https://github.com/hashicorp/hcl",
+    "license": "MPL-2.0",
+    "S.No": 19
+  },
+  {
+    "Component": "inf",
+    "version": "v0.9.1",
+    "Url": "https://github.com/go-inf",
+    "license": "BSD-3-Clause",
+    "S.No": 20
+  },
+  {
+    "Component": "ini",
+    "version": "v1.62.0",
+    "Url": "https://github.com/go-ini",
+    "license": "Apache-2.0",
+    "S.No": 21
+  },
+  {
+    "Component": "log",
+    "version": "v0.1.0",
+    "Url": "https://github.com/containerd/log",
+    "license": "Apache-2.0",
+    "S.No": 22
+  },
+  {
+    "Component": "logex",
+    "version": "v1.1.10",
+    "Url": "https://github.com/chzyer/logex",
+    "license": "MIT",
+    "S.No": 23
+  },
+  {
+    "Component": "logr",
+    "version": "v0.1.0",
+    "Url": "https://github.com/go-logr/logr",
+    "license": "Apache-2.0",
+    "S.No": 24
+  },
+  {
+    "Component": "logutils",
+    "version": "v1.0.0",
+    "Url": "https://github.com/hashicorp/logutils",
+    "license": "MPL-2.0",
+    "S.No": 25
+  },
+  {
+    "Component": "memberlist",
+    "version": "v0.1.3",
+    "Url": "https://github.com/hashicorp/memberlist",
+    "license": "MPL-2.0",
+    "S.No": 26
+  },
+  {
+    "Component": "metric",
+    "version": "v1.25.0",
+    "Url": "https://github.com/open-telemetry/opentelemetry-go",
+    "license": "Apache-2.0",
+    "S.No": 27
+  },
+  {
+    "Component": "multierr",
+    "version": "v1.6.0",
+    "Url": "https://github.com/uber-go/multierr",
+    "license": "MIT",
+    "S.No": 28
+  },
+  {
+    "Component": "otel",
+    "version": "v1.25.0",
+    "Url": "https://github.com/open-telemetry/opentelemetry-go",
+    "license": "Apache-2.0",
+    "S.No": 29
+  },
+  {
+    "Component": "otelgrpc",
+    "version": "v0.47.0",
+    "Url": "https://github.com/open-telemetry/opentelemetry-go-contrib",
+    "license": "Apache-2.0",
+    "S.No": 30
+  },
+  {
+    "Component": "otelhttp",
+    "version": "v0.50.0",
+    "Url": "https://github.com/open-telemetry/opentelemetry-go-contrib",
+    "license": "Apache-2.0",
+    "S.No": 31
+  },
+  {
+    "Component": "otlp",
+    "version": "v0.20.0",
+    "Url": "https://github.com/open-telemetry/opentelemetry-go",
+    "license": "Apache-2.0",
+    "S.No": 32
+  },
+  {
+    "Component": "otlptrace",
+    "version": "v1.25.0",
+    "Url": "https://github.com/open-telemetry/opentelemetry-go",
+    "license": "Apache-2.0",
+    "S.No": 33
+  },
+  {
+    "Component": "otlptracehttp",
+    "version": "v1.25.0",
+    "Url": "https://github.com/open-telemetry/opentelemetry-go",
+    "license": "Apache-2.0",
+    "S.No": 34
+  },
+  {
+    "Component": "protobuf",
+    "version": "v1.22.0",
+    "Url": "https://github.com/protocolbuffers/protobuf-go",
+    "license": "BSD-3-Clause",
+    "S.No": 35
+  },
+  {
+    "Component": "qemu",
+    "version": "2.11.1",
+    "Url": "https:://github.com/qemu/qemu",
+    "license": "GPL-2.0-or-later",
+    "S.No": 36
+  },
+  {
+    "Component": "sampler",
+    "version": "v1.3.0",
+    "Url": "https://github.com/rsc/sampler",
+    "license": "BSD-3-Clause",
+    "S.No": 37
+  },
+  {
+    "Component": "sdk",
+    "version": "v1.25.0",
+    "Url": "https://github.com/open-telemetry/opentelemetry-go",
+    "license": "Apache-2.0",
+    "S.No": 38
+  },
+  {
+    "Component": "tomb",
+    "version": "v1.0.0-20141024135613-dd632973f1e7",
+    "Url": "https://github.com/go-tomb/tomb",
+    "license": "BSD-3-Clause",
+    "S.No": 39
+  },
+  {
+    "Component": "tools",
+    "version": "v0.0.1-2020.1.4",
+    "Url": "https://github.com/dominikh/go-tools",
+    "license": "MIT",
+    "S.No": 40
+  },
+  {
+    "Component": "trace",
+    "version": "v1.25.0",
+    "Url": "https://github.com/open-telemetry/opentelemetry-go",
+    "license": "Apache-2.0",
+    "S.No": 41
+  },
+  {
+    "Component": "yaml",
+    "version": "v2.2.2",
+    "Url": "https://github.com/go-yaml",
+    "license": "Apache-2.0",
+    "S.No": 42
+  },
+  {
+    "Component": "yaml",
+    "version": "v3.0.0-20200313102051-9f266ea9e77c",
+    "Url": "https://github.com/go-yaml",
+    "license": "Apache-2.0 AND MIT",
+    "S.No": 43
+  },
+  {
+    "Component": "zap",
+    "version": "v1.17.0",
+    "Url": "https://github.com/uber-go",
+    "license": "MIT",
+    "S.No": 44
+  }
+]
