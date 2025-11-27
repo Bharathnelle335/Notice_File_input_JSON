@@ -1,0 +1,15 @@
+
+=MAP(
+  A2:A100,
+  LAMBDA(x,
+    LET(
+      /* Base from A: last part after hyphen, else x */
+      baseA, LOWER(IFERROR(TEXTAFTER(x, "-",,-1), x)),
+
+      /* Normalize C: lower, turn - _ . into spaces, pad for whole-word matching */
+      cleanC, " " & LOWER(SUBSTITUTE(SUBSTITUTE(SUBSTITUTE($C$2:$C$1000, "-", " "), "_", " "), ".", " ")) & " ",
+
+      matches, FILTER($C$2:$C$1000, ISNUMBER(SEARCH(" " & baseA & " ", cleanC))),
+      IFERROR(TEXTJOIN(", ", TRUE, matches), "No match")
+    )
+  )
